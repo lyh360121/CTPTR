@@ -438,7 +438,7 @@ def get_rid_rnfea_dict(rn_dict, parameters):
     norm_rid_rnfea_dict = {}
     for i in range(len(df)):
         k = df.index[i]
-        v = df.iloc[i][['norm_len','level_3','level_4','level_5','level_6',\
+        v = df.iloc[i][['norm_len', 'level_4',\
                         'norm_num_start_neighbors','norm_num_end_neighbors']]
         norm_rid_rnfea_dict[k] = list(v)
     

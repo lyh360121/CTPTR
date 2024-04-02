@@ -25,14 +25,14 @@ if __name__=='__main__':
         raw2new[str(edge_info['eid'])] = str(new_id)
         new_id +=1
     
-    with open('./extra_data/raw_rn_dict.json', 'w') as f:
+    with open('./data/map/extra_info/raw_rn_dict.json', 'w') as f:
         json.dump(raw_rn_dict, f)
 
-    with open('./extra_data/rn_dict.json', 'w') as f:
+    with open('./data/map/extra_info/rn_dict.json', 'w') as f:
         json.dump(rn_dict, f)   
     
-    with open('./extra_data/new2raw_rid.json', 'w') as f:
+    with open('./data/map/extra_info/new2raw_rid.json', 'w') as f:
         json.dump(new2raw, f)
 
-    with open('./extra_data/raw2new_rid.json', 'w') as f:
+    with open('./data/map/extra_info/raw2new_rid.json', 'w') as f:
         json.dump(raw2new, f) 

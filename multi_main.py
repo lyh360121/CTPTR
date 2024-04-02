@@ -33,11 +33,11 @@ torch.backends.cudnn.deterministic = True
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Multi-task Traj Interp')
-    parser.add_argument('--module_type', type=str, default='simple', help='module type')
-    parser.add_argument('--keep_ratio', type=float, default=0.125, help='keep ratio in float')
+    parser.add_argument('--module_type', type=str, default='spe', help='module type')
+    parser.add_argument('--keep_ratio', type=float, default=0.0625, help='keep ratio in float')
     parser.add_argument('--lambda1', type=int, default=10, help='weight for multi task rate')
     parser.add_argument('--hid_dim', type=int, default=512, help='hidden dimension')
-    parser.add_argument('--epochs', type=int, default=20, help='epochs')
+    parser.add_argument('--epochs', type=int, default=10, help='epochs')
     parser.add_argument('--grid_size', type=int, default=50, help='grid size in int')
     parser.add_argument('--dis_prob_mask_flag', action='store_true', help='flag of using prob mask')
     parser.add_argument('--pro_features_flag', action='store_true', help='flag of using profile features')
@@ -91,10 +91,10 @@ if __name__ == '__main__':
         'poi_type':'company,food,shopping,viewpoint,house',
 
         # MBR
-        'min_lat':41.141975,
-        'min_lng':-8.627057,
-        'max_lat':41.157462,
-        'max_lng':-8.615305,
+        'min_lat':41.146,
+        'min_lng':-8.620,
+        'max_lat':41.148,
+        'max_lng':-8.618,
 
         # input data params
         'keep_ratio':opts.keep_ratio,
@@ -109,7 +109,7 @@ if __name__ == '__main__':
         'hid_dim':opts.hid_dim,
         'id_emb_dim':128,
         'dropout':0.5,
-        'id_size':2296+1,
+        'id_size':149+1,
 
         'lambda1':opts.lambda1,
         'n_epochs':opts.epochs,
@@ -183,7 +183,8 @@ if __name__ == '__main__':
     # load dataset
     train_dataset = Dataset(
         train_trajs_dir,
-        mbr, norm_grid_poi_dict,
+        mbr,
+        norm_grid_poi_dict,
         norm_grid_rnfea_dict,
         weather_dict,
         rn,
@@ -200,6 +201,7 @@ if __name__ == '__main__':
         rn,
         new2raw_rid_dict,
         parameters=args,
+        is_test=True,
         debug=debug
     )
     test_dataset = Dataset(
@@ -211,6 +213,7 @@ if __name__ == '__main__':
         rn,
         new2raw_rid_dict,
         parameters=args,
+        is_test=True,
         debug=debug
     )
     print('training dataset shape: ' + str(len(train_dataset)))

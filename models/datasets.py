@@ -4,6 +4,7 @@ from utils.parse_traj import ParseMMTraj
 from utils.save_traj import SaveTraj2MM
 from utils.utils import create_dir
 from map_matching.utils import find_shortest_path
+from map_matching.hmm.hmm_map_matcher import TIHMMMapMatcher
 
 from chinese_calendar import is_holiday
 from datetime import datetime, timedelta
@@ -53,7 +54,7 @@ class Dataset(torch.utils.data.Dataset):
     customize a dataset for PyTorch
     """
 
-    def __init__(self, trajs_dir, mbr, norm_grid_poi_dict, norm_grid_rnfea_dict, weather_dict, rn, new2raw_rid_dict, parameters, debug=True):
+    def __init__(self, trajs_dir, mbr, norm_grid_poi_dict, norm_grid_rnfea_dict, weather_dict, rn, new2raw_rid_dict, parameters, is_test = False, debug=True):
         self.mbr = mbr  # MBR of all trajectories
         self.grid_size = parameters.grid_size
         self.time_span = parameters.time_span  # time interval between two consecutive points.
@@ -62,7 +63,9 @@ class Dataset(torch.utils.data.Dataset):
         self.trg_gps_seqs, self.trg_rids, self.trg_rates = [], [], []
         self.new_tids = []
         self.rn = rn
+        self.map_matcher = TIHMMMapMatcher(rn)
         self.new2raw_rid_dict = new2raw_rid_dict
+        self.is_test = is_test
         # above should be [num_seq, len_seq(unpadded)]
         self.get_data(trajs_dir, norm_grid_poi_dict, norm_grid_rnfea_dict, weather_dict, parameters.win_size, 
                       parameters.ds_type, parameters.keep_ratio, debug)
@@ -113,7 +116,6 @@ class Dataset(torch.utils.data.Dataset):
         for file_name in tqdm(trg_paths):
             trajs = parser.parse(os.path.join(trajs_dir, file_name))
             for traj in trajs[:num]:
-                
                 new_tid_ls, mm_gps_seq_ls, mm_eids_ls, mm_rates_ls, \
                 ls_grid_seq_ls, ls_gps_seq_ls, features_ls = self.parse_traj(traj, norm_grid_poi_dict, norm_grid_rnfea_dict,
                                                                              weather_dict, win_size, ds_type, keep_ratio)
@@ -162,6 +164,8 @@ class Dataset(torch.utils.data.Dataset):
 
         for tr in new_trajs:
             tmp_pt_list = tr.pt_list
+            # if self.is_test and len(tmp_pt_list) < 1/keep_ratio:
+            #     continue
             new_tid_ls.append(tr.tid)
 
             # get target sequence
@@ -178,8 +182,8 @@ class Dataset(torch.utils.data.Dataset):
             features = self.get_pro_features(ds_pt_list, hours, weather_dict)
 
             # check if src and trg len equal, if not return none
-            if len(mm_gps_seq) != ttl_t:
-                return None, None, None, None, None, None, None
+            # if len(mm_gps_seq) != ttl_t:
+            #     return None, None, None, None, None, None, None
             
             mm_gps_seq_ls.append(mm_gps_seq)
             mm_eids_ls.append(mm_eids)
@@ -190,31 +194,46 @@ class Dataset(torch.utils.data.Dataset):
         return new_tid_ls, mm_gps_seq_ls, mm_eids_ls, mm_rates_ls, ls_grid_seq_ls, ls_gps_seq_ls, features_ls
 
     def enhance_traj(self, pt_list):
-        if pt_list is None or len(pt_list) < 2:
-            return pt_list
+        if pt_list is None:
+            return None
+        assert len(pt_list) > 1, 'the number of points in trajectories must be larger than 1'
+            
+        mm_ls = self.match_ls(pt_list)
         pt_list_enhanced = []
-        for i in range(len(pt_list) -1):
+        for i in range(len(mm_ls) -1):
             if i == 0:
-                pt_list_enhanced = self.enhance_func(pt_list[i], pt_list[i+1])
+                pt_list_enhanced = self.enhance_func(mm_ls[i], mm_ls[i+1])
             else:
-                pt_list_enhanced.extend(self.enhance_func(pt_list[i], pt_list[i+1])[1:])
+                pt_list_enhanced.extend(self.enhance_func(mm_ls[i], mm_ls[i+1])[1:])
         return pt_list_enhanced
+
+    def match_ls(self, pt_list): 
+        seq = self.map_matcher.compute_viterbi_sequence(pt_list)
+        assert len(pt_list) == len(seq), 'pt_list and seq must have the same size'
+        mm_pt_list = []
+        for ss in seq:
+            candi_pt = None
+            if ss.state is not None:
+                candi_pt = ss.state
+            data = {'candi_pt': candi_pt}
+            mm_pt_list.append(STPoint(ss.observation.lat, ss.observation.lng, ss.observation.time, data))
+        return mm_pt_list
     
     def enhance_func(self, pre_pt, pro_pt):
+        # init state
         src_pt = copy.deepcopy(pre_pt.data['candi_pt'])
         dest_pt = copy.deepcopy(pro_pt.data['candi_pt'])
-        src_pt.eid = self.new2raw_rid_dict[src_pt.eid]
-        dest_pt.eid =self.new2raw_rid_dict[dest_pt.eid]
+        # src_pt.eid = self.new2raw_rid_dict[src_pt.eid]
+        # dest_pt.eid =self.new2raw_rid_dict[dest_pt.eid]
+        time = pre_pt.time
+        lat = src_pt.lat
+        lng = src_pt.lng
+        traj_enhanced = [STPoint(lat, lng, time)]
+
         path_dist, path = find_shortest_path(self.rn, src_pt, dest_pt)
         if path is not None and path_dist > 0:
             time_span = (pro_pt.time - pre_pt.time).total_seconds()
             velocity = path_dist / time_span # m/s
-
-            # init state
-            time = pre_pt.time
-            lat = src_pt.lat
-            lng = src_pt.lng
-            traj_enhanced = [STPoint(lat, lng, time)]
 
             # src
             eid_src = src_pt.eid
@@ -244,19 +263,16 @@ class Dataset(torch.utils.data.Dataset):
                     lng = node_end[0]
                     traj_enhanced.append(STPoint(lat, lng, time))
 
-            # dest
-            eid_dest = dest_pt.eid
-            edge_dest = self.rn.edge_idx[eid_dest]
-            if dest_pt.rate != 0:
-                edge_length = dest_pt.offset
-                seconds = edge_length / velocity
-                time = pro_pt.time
-                lat = edge_dest[0][1]
-                lng = edge_dest[0][0]
-                traj_enhanced.append(STPoint(lat, lng, time))
+        # dest
+        eid_dest = dest_pt.eid
+        edge_dest = self.rn.edge_idx[eid_dest]
+        if dest_pt.rate != 0:
+            time = pro_pt.time
+            lat = edge_dest[0][1]
+            lng = edge_dest[0][0]
+            traj_enhanced.append(STPoint(lat, lng, time))
 
-            return traj_enhanced
-        return [pre_pt, pro_pt]
+        return traj_enhanced
     
     def get_win_trajs(self, traj, win_size):
         pt_list = traj.pt_list
@@ -364,7 +380,8 @@ class Dataset(torch.utils.data.Dataset):
         calculate normalized t from first and current pt
         return time index (normalized time)
         """
-        t = int(1+((current_pt.time - first_pt.time).seconds/time_interval))
+        # t = int(1+((current_pt.time - first_pt.time).seconds/time_interval))
+        t = (current_pt.time - first_pt.time).seconds
         return t
 
     @staticmethod

@@ -1,5 +1,4 @@
 .idea/
-/data/model_data/*
-/data/raw_trajectory/*
+/data/
 __pycache__/
 /results/*

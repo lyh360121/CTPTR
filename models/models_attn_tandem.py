@@ -115,7 +115,7 @@ class Attention(nn.Module):
         attention = attention.masked_fill(attn_mask == 0, -1e10)
         # using mask to force the attention to only be over non-padding elements.
 
-        return F.softmax(attention, dim=1)
+        return F.softmax(attention, dim=1), attention
 
 
 class DecoderMulti(nn.Module):
@@ -183,9 +183,11 @@ class DecoderMulti(nn.Module):
         # input_rate = [1, batch size, 1]
         embedded = self.dropout(self.emb_id(input_id))
         # embedded = [1, batch size, emb dim]
+        all_attention_weights = []
 
         if self.attn_flag:
-            a = self.attn(hidden, encoder_outputs, attn_mask)
+            a, a_t = self.attn(hidden, encoder_outputs, attn_mask)
+            all_attention_weights.append(a_t)
             # a = [batch size, src len]
             a = a.unsqueeze(1)
             # a = [batch size, 1, src len]
@@ -237,7 +239,7 @@ class DecoderMulti(nn.Module):
         # prediction_id = [batch size, id_size]
         # prediction_rate = [batch size, 1]
 
-        return prediction_id, prediction_rate, hidden
+        return prediction_id, prediction_rate, hidden, torch.stack(all_attention_weights)
 
 class Seq2SeqMulti(nn.Module):
     def __init__(self, encoder, decoder, device):
@@ -285,14 +287,14 @@ class Seq2SeqMulti(nn.Module):
         else:
             attn_mask = None
 
-        outputs_id, outputs_rate = self.normal_step(max_trg_len, batch_size, trg_id, trg_rate, trg_len,
+        outputs_id, outputs_rate, attention_weights = self.normal_step(max_trg_len, batch_size, trg_id, trg_rate, trg_len,
                                                     encoder_outputs, hiddens, attn_mask,
                                                     online_features_dict,
                                                     rid_features_dict,
                                                     pre_grids, next_grids, constraint_mat, pro_features,
                                                     teacher_forcing_ratio)
 
-        return outputs_id, outputs_rate
+        return outputs_id, outputs_rate, attention_weights
 
     def normal_step(self, max_trg_len, batch_size, trg_id, trg_rate, trg_len, encoder_outputs, hidden,
                     attn_mask, online_features_dict, rid_features_dict,
@@ -306,6 +308,8 @@ class Seq2SeqMulti(nn.Module):
         # tensor to store decoder outputs
         outputs_id = torch.zeros(max_trg_len, batch_size, self.decoder.id_size).to(self.device)
         outputs_rate = torch.zeros(trg_rate.size()).to(self.device)
+        all_attention_weights = []
+
 
         # first input to the decoder is the <sos> tokens
         input_id = trg_id[0, :]
@@ -322,7 +326,7 @@ class Seq2SeqMulti(nn.Module):
                 rid_features = get_dict_info_batch(input_id, rid_features_dict).to(self.device)
             else:
                 rid_features = None
-            prediction_id, prediction_rate, hidden = self.decoder(input_id, input_rate, hidden, encoder_outputs,
+            prediction_id, prediction_rate, hidden, attention_weights = self.decoder(input_id, input_rate, hidden, encoder_outputs,
                                                                      attn_mask, pre_grids[t], next_grids[t],
                                                                      constraint_mat[t], pro_features, online_features,
                                                                      rid_features)
@@ -330,6 +334,7 @@ class Seq2SeqMulti(nn.Module):
             # place predictions in a tensor holding predictions for each token
             outputs_id[t] = prediction_id
             outputs_rate[t] = prediction_rate
+            all_attention_weights.append(attention_weights)
 
             # decide if we are going to use teacher forcing or not
             teacher_force = random.random() < teacher_forcing_ratio
@@ -347,11 +352,11 @@ class Seq2SeqMulti(nn.Module):
         outputs_id = outputs_id.permute(1, 0, 2)  # batch size, seq len, rid size
         outputs_rate = outputs_rate.permute(1, 0, 2)  # batch size, seq len, 1
         for i in range(batch_size):
-            outputs_id[i][trg_len[i]:] = 0
-            outputs_id[i][trg_len[i]:, 0] = 1  # make sure argmax will return eid0
+            outputs_id[i][trg_len[i]:] = -100
+            outputs_id[i][trg_len[i]:, 0] = 0  # make sure argmax will return eid0
             outputs_rate[i][trg_len[i]:] = 0
         outputs_id = outputs_id.permute(1, 0, 2)
         outputs_rate = outputs_rate.permute(1, 0, 2)
 
-        return outputs_id, outputs_rate
+        return outputs_id, outputs_rate, torch.stack(all_attention_weights, dim=0)
 

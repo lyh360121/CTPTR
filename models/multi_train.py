@@ -7,6 +7,8 @@ from models.loss_fn import cal_id_acc, check_rn_dis_loss
 
 import torch
 import torch.nn as nn
+import matplotlib.pyplot as plt
+import numpy as np
 import pdb
 
 
@@ -27,6 +29,30 @@ def init_weights(self):
         nn.init.constant_(t, 0)
 
 
+def plot_attention(attention, input_seq, output_seq):
+    """
+    Plots a heatmap of attention weights.
+    
+    :param attention: A 2D numpy array of attention weights.
+    :param input_seq: List of input tokens.
+    :param output_seq: List of output tokens.
+    """
+    fig, ax = plt.subplots()
+    cax = ax.matshow(attention, cmap='bone')
+    fig.colorbar(cax)
+    pdb.set_trace()
+
+    # Set up axes
+    ax.set_xticklabels([''] + input_seq, rotation=90)
+    ax.set_yticklabels([''] + output_seq)
+
+    # Show label at every tick
+    ax.xaxis.set_major_locator(plt.MultipleLocator(1))
+    ax.yaxis.set_major_locator(plt.MultipleLocator(1))
+
+    plt.show()
+
+
 def train(model, iterator, optimizer, log_vars, rn_dict, grid_rn_dict, rn,
           raw2new_rid_dict, online_features_dict, rid_features_dict, parameters):
     model.train()  # not necessary to have this line but it's safe to use model.train() to train model
@@ -44,7 +70,6 @@ def train(model, iterator, optimizer, log_vars, rn_dict, grid_rn_dict, rn,
     for i, batch in enumerate(iterator):
         src_grid_seqs, src_gps_seqs, src_pro_feas, src_lengths, trg_gps_seqs, trg_rids, trg_rates, trg_lengths = batch
         if parameters.dis_prob_mask_flag:
-            pdb.set_trace()
             constraint_mat, pre_grids, next_grids = get_constraint_mask(src_grid_seqs, src_gps_seqs, src_lengths,
                                                                         trg_lengths, grid_rn_dict, rn, raw2new_rid_dict,
                                                                         parameters)
@@ -74,12 +99,15 @@ def train(model, iterator, optimizer, log_vars, rn_dict, grid_rn_dict, rn,
         # trg_lengths = [batch size]
 
         optimizer.zero_grad()
-        output_ids, output_rates = model(src_grid_seqs, src_lengths, trg_rids, trg_rates, trg_lengths,
+        output_ids, output_rates, attention_weights = model(src_grid_seqs, src_lengths, trg_rids, trg_rates, trg_lengths,
                                          pre_grids, next_grids, constraint_mat, src_pro_feas,
                                          online_features_dict, rid_features_dict, parameters.tf_ratio)
         output_rates = output_rates.squeeze(2)
         trg_rids = trg_rids.squeeze(2)
         trg_rates = trg_rates.squeeze(2)
+        # attention_weights_array = attention_weights.squeeze(1).permute(1, 0, 2).cpu().detach().numpy()
+        # pdb.set_trace()
+        # plot_attention(attention_weights_array[0],  list(range(len(src_grid_seqs.permute(1,0,2)[0]))), list(range(len(trg_rids.permute(1,0)[0]))))
 
         # output_ids = [trg len, batch size, id one hot output dim]
         # output_rates = [trg len, batch size]
@@ -98,7 +126,6 @@ def train(model, iterator, optimizer, log_vars, rn_dict, grid_rn_dict, rn,
         loss_train_ids = criterion_ce(output_ids, trg_rids)
         loss_rates = criterion_reg(output_rates[1:], trg_rates[1:]) * parameters.lambda1
         ttl_loss = loss_train_ids + loss_rates
-
         ttl_loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), parameters.clip)  # log_vars are not necessary to clip
         optimizer.step()
@@ -165,7 +192,7 @@ def evaluate(model, iterator, rn_dict, grid_rn_dict, rn, raw2new_rid_dict,
             # trg_rates = [trg len, batch size, 1]
             # trg_lengths = [batch size]
 
-            output_ids, output_rates = model(src_grid_seqs, src_lengths, trg_rids, trg_rates, trg_lengths,
+            output_ids, output_rates, _ = model(src_grid_seqs, src_lengths, trg_rids, trg_rates, trg_lengths,
                                              pre_grids, next_grids, constraint_mat,
                                              src_pro_feas, online_features_dict, rid_features_dict,
                                              teacher_forcing_ratio=0)
