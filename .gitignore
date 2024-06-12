@@ -1,4 +1,8 @@
 .idea/
 /data/
+/data1/
+/data2/
 __pycache__/
 /results/*
+/results1/*
+/results2/*

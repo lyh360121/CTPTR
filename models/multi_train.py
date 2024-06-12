@@ -2,7 +2,7 @@
 # coding: utf-8
 # @Time    : 2020/10/29 17:37
 
-from models.model_utils import toseq, get_constraint_mask
+from models.model_utils import toseq, get_constraint_mask, rate2gps
 from models.loss_fn import cal_id_acc, check_rn_dis_loss
 
 import torch
@@ -40,7 +40,6 @@ def plot_attention(attention, input_seq, output_seq):
     fig, ax = plt.subplots()
     cax = ax.matshow(attention, cmap='bone')
     fig.colorbar(cax)
-    pdb.set_trace()
 
     # Set up axes
     ax.set_xticklabels([''] + input_seq, rotation=90)
@@ -67,6 +66,14 @@ def train(model, iterator, optimizer, log_vars, rn_dict, grid_rn_dict, rn,
     epoch_train_id_loss = 0
     epoch_rate_loss = 0
     device = parameters.device
+
+    # num = len(iterator) - 1
+    # lr = optimizer.param_groups[0]['lr']
+    # mult = (10.0 / 1e-8) ** (1/num)
+    # best_loss = 0.
+    # losses = []
+    # log_lrs = []
+
     for i, batch in enumerate(iterator):
         src_grid_seqs, src_gps_seqs, src_pro_feas, src_lengths, trg_gps_seqs, trg_rids, trg_rates, trg_lengths = batch
         if parameters.dis_prob_mask_flag:
@@ -118,13 +125,29 @@ def train(model, iterator, optimizer, log_vars, rn_dict, grid_rn_dict, rn,
         loss_ids1, recall, precision = cal_id_acc(output_ids[1:], trg_rids[1:], trg_lengths)
 
         # for bbp
+        rate_mask = (torch.argmax(output_ids, dim=2) == trg_rids).float()
         output_ids_dim = output_ids.shape[-1]
         output_ids = output_ids[1:].reshape(-1, output_ids_dim)  # [(trg len - 1)* batch size, output id one hot dim]
         trg_rids = trg_rids[1:].reshape(-1)  # [(trg len - 1) * batch size],
         # view size is not compatible with input tensor's size and stride ==> use reshape() instead
 
         loss_train_ids = criterion_ce(output_ids, trg_rids)
-        loss_rates = criterion_reg(output_rates[1:], trg_rates[1:]) * parameters.lambda1
+        # points_pred = []
+        # points_trg = []
+        # p_a = output_ids.argmax(1)
+        # p_b = output_rates[1:].reshape(-1)
+        # p_c = trg_rids
+        # p_d = trg_rates[1:].reshape(-1)
+        # for pi in range(trg_rids.size(0)):
+        #     point_pred = rate2gps(rn_dict, p_a[pi], p_b[pi], parameters)
+        #     point_trg = rate2gps(rn_dict, p_c[pi], p_d[pi], parameters)
+        #     points_pred.append([point_pred.lat, point_pred.lng])
+        #     points_trg.append([point_trg.lat, point_trg.lng])
+        # loss_rates = criterion_reg(torch.tensor(points_pred), torch.tensor(points_trg))
+        # loss_rates = criterion_reg(output_rates[1:], trg_rates[1:]) * parameters.lambda1
+        loss_rates_1 = criterion_reg(output_rates[1:]*rate_mask[1:], trg_rates[1:]*rate_mask[1:])
+        loss_rates_2 = criterion_reg(torch.zeros(rate_mask[1:].shape).to(device), 1-rate_mask[1:])
+        loss_rates =(loss_rates_1 + loss_rates_2) * parameters.lambda1
         ttl_loss = loss_train_ids + loss_rates
         ttl_loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), parameters.clip)  # log_vars are not necessary to clip
@@ -134,9 +157,20 @@ def train(model, iterator, optimizer, log_vars, rn_dict, grid_rn_dict, rn,
         epoch_id1_loss += loss_ids1
         epoch_recall_loss += recall
         epoch_precision_loss += precision
-        epoch_train_id_loss += loss_train_ids.item()
+        # epoch_train_id_loss += loss_train_ids.item()
         epoch_rate_loss += loss_rates.item()
 
+    #     # 更新学习率
+    #     lr *= mult
+    #     optimizer.param_groups[0]['lr'] *= lr
+    #     smoothed_loss = ttl_loss / (1 - 0.98**(i+1))
+    #     losses.append(smoothed_loss)
+    #     log_lrs.append(lr)
+    #     if i > 0 and smoothed_loss > 4 * best_loss:
+    #         break
+    #     if smoothed_loss < best_loss or i == 0:
+    #         best_loss = smoothed_loss
+    # pdb.set_trace()
     return log_vars, epoch_ttl_loss / len(iterator), epoch_id1_loss / len(iterator), epoch_recall_loss / len(iterator), \
            epoch_precision_loss / len(iterator), epoch_rate_loss / len(iterator), epoch_train_id_loss / len(iterator)
 
@@ -192,11 +226,12 @@ def evaluate(model, iterator, rn_dict, grid_rn_dict, rn, raw2new_rid_dict,
             # trg_rates = [trg len, batch size, 1]
             # trg_lengths = [batch size]
 
-            output_ids, output_rates, _ = model(src_grid_seqs, src_lengths, trg_rids, trg_rates, trg_lengths,
+            output_ids, output_rates, attention_weights = model(src_grid_seqs, src_lengths, trg_rids, trg_rates, trg_lengths,
                                              pre_grids, next_grids, constraint_mat,
                                              src_pro_feas, online_features_dict, rid_features_dict,
                                              teacher_forcing_ratio=0)
 
+            # plot_attention(attention_weights[0][0][0].cpu(), list(range(max(src_lengths))), list(range(max(trg_lengths))))
             output_rates = output_rates.squeeze(2)
             output_seqs = toseq(rn_dict, output_ids, output_rates, parameters)
             trg_rids = trg_rids.squeeze(2)
@@ -207,7 +242,7 @@ def evaluate(model, iterator, rn_dict, grid_rn_dict, rn, raw2new_rid_dict,
             # trg_rates = [trg len, batch size]
 
             # rid loss, only show and not bbp
-            loss_ids1, recall, precision = cal_id_acc(output_ids[1:], trg_rids[1:], trg_lengths)
+            loss_ids1, recall, precision = cal_id_acc(output_ids[1:], trg_rids[1:], trg_lengths, debug=True)
             # distance loss
             dis_mae_loss, dis_rmse_loss, dis_rn_mae_loss, dis_rn_rmse_loss = check_rn_dis_loss(output_seqs[1:],
                                                                                                output_ids[1:],
@@ -220,13 +255,17 @@ def evaluate(model, iterator, rn_dict, grid_rn_dict, rn, raw2new_rid_dict,
                                                                                                new2raw_rid_dict)
 
             # for bbp
+            rate_mask = (torch.argmax(output_ids, dim=2) == trg_rids).float()
             output_ids_dim = output_ids.shape[-1]
             output_ids = output_ids[1:].reshape(-1,
                                                 output_ids_dim)  # [(trg len - 1)* batch size, output id one hot dim]
             trg_rids = trg_rids[1:].reshape(-1)  # [(trg len - 1) * batch size],
             loss_ids = criterion_ce(output_ids, trg_rids)
             # rate loss
-            loss_rates = criterion_reg(output_rates[1:], trg_rates[1:]) * parameters.lambda1
+            loss_rates_1 = criterion_reg(output_rates[1:]*rate_mask[1:], trg_rates[1:]*rate_mask[1:])
+            loss_rates_2 = criterion_reg(torch.zeros(rate_mask[1:].shape).to(device), 1-rate_mask[1:])
+            loss_rates =(loss_rates_1 + loss_rates_2) * parameters.lambda1
+            # loss_rates = criterion_reg(output_rates[1:], trg_rates[1:]) * parameters.lambda1
             # loss_rates.size = [(trg len - 1), batch size], --> [(trg len - 1)* batch size,1]
 
             epoch_dis_mae_loss += dis_mae_loss

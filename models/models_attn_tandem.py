@@ -8,6 +8,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import pdb
+import time
 
 from models.model_utils import get_dict_info_batch
 
@@ -50,6 +51,7 @@ class Encoder(nn.Module):
         self.dropout = nn.Dropout(parameters.dropout)
 
         if self.pro_features_flag:
+
             self.extra = Extra_MLP(parameters)
             self.fc_hid = nn.Linear(self.hid_dim + self.pro_output_dim, self.hid_dim)
 
@@ -108,6 +110,7 @@ class Attention(nn.Module):
         # encoder_outputs = [batch size, src len, hid dim * num directions]
 
         energy = torch.tanh(self.attn(torch.cat((hidden, encoder_outputs), dim=2)))
+        # energy = torch.tanh(self.attn(encoder_outputs))
         # energy = [batch size, src len, hid dim]
 
         attention = self.v(energy).squeeze(2)
@@ -137,6 +140,7 @@ class DecoderMulti(nn.Module):
         self.emb_id = nn.Embedding(self.id_size, self.id_emb_dim)
         
         rnn_input_dim = self.id_emb_dim + 1
+        # rnn_input_dim = self.id_emb_dim
         fc_id_out_input_dim = self.hid_dim
         fc_rate_out_input_dim = self.hid_dim
         
@@ -208,8 +212,10 @@ class DecoderMulti(nn.Module):
                 rnn_input = torch.cat((embedded, input_rate, online_features.unsqueeze(0)), dim=2)
             else:
                 rnn_input = torch.cat((embedded, input_rate), dim=2)
+                # rnn_input = embedded + input_rate
 
         output, hidden = self.rnn(rnn_input, hidden)
+        # output, hidden = self.rnn(rnn_input)
         
         # output = [seq len, batch size, hid dim * n directions]
         # hidden = [n layers * n directions, batch size, hid dim]
@@ -230,6 +236,7 @@ class DecoderMulti(nn.Module):
         max_id = prediction_id.argmax(dim=1).long()
         id_emb = self.dropout(self.emb_id(max_id))
         rate_input = torch.cat((id_emb, hidden.squeeze(0)),dim=1)
+        # rate_input = hidden.squeeze(0)
         rate_input = self.tandem_fc(rate_input)  # [batch size, hid dim]
         if self.tandem_fea_flag:
             prediction_rate = torch.sigmoid(self.fc_rate_out(torch.cat((rate_input, rid_features), dim=1)))
@@ -239,15 +246,32 @@ class DecoderMulti(nn.Module):
         # prediction_id = [batch size, id_size]
         # prediction_rate = [batch size, 1]
 
-        return prediction_id, prediction_rate, hidden, torch.stack(all_attention_weights)
+        return prediction_id, prediction_rate, hidden, torch.stack(all_attention_weights) if len(all_attention_weights) > 0 else all_attention_weights
 
 class Seq2SeqMulti(nn.Module):
-    def __init__(self, encoder, decoder, device):
+    def __init__(self, encoder, decoder, parameters):
         super().__init__()
 
         self.encoder = encoder  # Encoder
         self.decoder = decoder  # DecoderMulti
-        self.device = device
+        self.device = parameters.device
+
+        # d_model = parameters.hid_dim
+        # nhead = parameters.nhead
+        # nlayers = parameters.nlayers
+        # dropout = parameters.dropout
+
+        # encoder_layers = nn.TransformerEncoderLayer(d_model, nhead, d_model, dropout)
+        # self.transformer_encoder = nn.TransformerEncoder(encoder_layers, nlayers)
+
+    def get_padding_mask(self, src_len):
+        max_src_len = max(src_len)
+        batch_size = len(src_len)
+        memory_key_padding_mask  = torch.zeros(batch_size, max_src_len, dtype=torch.bool)
+        for i, length in enumerate(src_len):
+            if length < max_src_len:
+                memory_key_padding_mask[i, length:] = True  # 屏蔽超出有效长度的位置
+        return memory_key_padding_mask
 
     def forward(self, src, src_len, trg_id, trg_rate, trg_len,
                 pre_grids, next_grids, constraint_mat, pro_features, 
@@ -278,6 +302,8 @@ class Seq2SeqMulti(nn.Module):
         # encoder_outputs is all hidden states of the input sequence, back and forwards
         # hidden is the final forward and backward hidden states, passed through a linear layer
         encoder_outputs, hiddens = self.encoder(src, src_len, pro_features)
+        # src_key_padding_mask = self.get_padding_mask(src_len).to(self.device)
+        # encoder_outputs, hiddens  = self.transformer_encoder(encoder_outputs, mask=None, src_key_padding_mask=src_key_padding_mask)
 
         if self.decoder.attn_flag:
             attn_mask = torch.zeros(batch_size, max(src_len))  # only attend on unpadded sequence
@@ -314,6 +340,7 @@ class Seq2SeqMulti(nn.Module):
         # first input to the decoder is the <sos> tokens
         input_id = trg_id[0, :]
         input_rate = trg_rate[0, :]
+        # start_time = time.time()
         for t in range(1, max_trg_len):
             # insert input token embedding, previous hidden state, all encoder hidden states
             #  and attn_mask
@@ -351,6 +378,8 @@ class Seq2SeqMulti(nn.Module):
         # max_trg_len, batch_size, trg_rid_size
         outputs_id = outputs_id.permute(1, 0, 2)  # batch size, seq len, rid size
         outputs_rate = outputs_rate.permute(1, 0, 2)  # batch size, seq len, 1
+        # end_time = time.time()
+        # print('=== tiem step: {}, time spend: {} ==='.format(t, end_time-start_time))
         for i in range(batch_size):
             outputs_id[i][trg_len[i]:] = -100
             outputs_id[i][trg_len[i]:, 0] = 0  # make sure argmax will return eid0
@@ -358,5 +387,5 @@ class Seq2SeqMulti(nn.Module):
         outputs_id = outputs_id.permute(1, 0, 2)
         outputs_rate = outputs_rate.permute(1, 0, 2)
 
-        return outputs_id, outputs_rate, torch.stack(all_attention_weights, dim=0)
+        return outputs_id, outputs_rate, all_attention_weights
 

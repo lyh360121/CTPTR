@@ -9,7 +9,8 @@ from models.datasets import Dataset, collate_fn, split_data
 from models.model_utils import load_rn_dict, load_rid_freqs, get_rid_grid, get_poi_info, get_rn_info
 from models.model_utils import get_online_info_dict, epoch_time, AttrDict, get_rid_rnfea_dict
 from models.multi_train import evaluate, init_weights, train
-from models.models_attn_tandem import Encoder, DecoderMulti, Seq2SeqMulti
+# from models.models_attn_tandem import Encoder, DecoderMulti, Seq2SeqMulti
+from models.transformer import TransformerModel, DecoderMulti, Encoder
 
 import time
 import random
@@ -33,11 +34,11 @@ torch.backends.cudnn.deterministic = True
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Multi-task Traj Interp')
-    parser.add_argument('--module_type', type=str, default='spe', help='module type')
+    parser.add_argument('--module_type', type=str, default='spe_ploss', help='module type')
     parser.add_argument('--keep_ratio', type=float, default=0.0625, help='keep ratio in float')
     parser.add_argument('--lambda1', type=int, default=10, help='weight for multi task rate')
     parser.add_argument('--hid_dim', type=int, default=512, help='hidden dimension')
-    parser.add_argument('--epochs', type=int, default=10, help='epochs')
+    parser.add_argument('--epochs', type=int, default=50, help='epochs')
     parser.add_argument('--grid_size', type=int, default=50, help='grid size in int')
     parser.add_argument('--dis_prob_mask_flag', action='store_true', help='flag of using prob mask')
     parser.add_argument('--pro_features_flag', action='store_true', help='flag of using profile features')
@@ -59,6 +60,7 @@ if __name__ == '__main__':
 
     args = AttrDict()
     args_dict = {
+        'pcm': True,
         'module_type':opts.module_type,
         'debug':debug,
         'device':device,
@@ -84,17 +86,25 @@ if __name__ == '__main__':
 
         # extra info module
         'rid_fea_dim':8,
-        'pro_input_dim':30, # 24[hour] + 5[waether] + 1[holiday]
+        'pro_input_dim':25, # 24[hour] + 5[waether] + 1[holiday]
         'pro_output_dim':8,
         'poi_num':5,
         'online_dim':5+5,  # poi/roadnetwork features dim
         'poi_type':'company,food,shopping,viewpoint,house',
 
         # MBR
-        'min_lat':41.146,
-        'min_lng':-8.620,
-        'max_lat':41.148,
-        'max_lng':-8.618,
+        # 'min_lat':41.131,
+        # 'min_lng':-8.641,
+        # 'max_lat':41.133,
+        # 'max_lng':-8.639,
+        # 'min_lat':41.149,
+        # 'min_lng':-8.634,
+        # 'max_lat':41.154,
+        # 'max_lng':-8.629,
+        'min_lat':  41.1496, 
+        'min_lng': -8.6291, 
+        'max_lat': 41.1611, 
+        'max_lng': -8.6101,
 
         # input data params
         'keep_ratio':opts.keep_ratio,
@@ -108,16 +118,20 @@ if __name__ == '__main__':
         # model params
         'hid_dim':opts.hid_dim,
         'id_emb_dim':128,
-        'dropout':0.5,
-        'id_size':149+1,
+        'dropout':0.4,
+        'id_size':3229+1,
 
         'lambda1':opts.lambda1,
         'n_epochs':opts.epochs,
-        'batch_size':128,
-        'learning_rate':1e-3,
+        'batch_size':16,
+        'learning_rate':1e-4,
         'tf_ratio':0.5,
         'clip':1,
-        'log_step':1
+        'log_step':1,
+
+        # transformer parameters
+        'nhead': 4,
+        'nlayers': 1
     }
     args.update(args_dict)
 
@@ -141,7 +155,7 @@ if __name__ == '__main__':
     if args.load_pretrained_flag:
             model_save_path = args.model_old_path
     else:
-        model_save_path = './results/'+args.module_type+'_kr_'+str(args.keep_ratio)+'_debug_'+str(args.debug)+\
+        model_save_path = './results/'+args.module_type+str(args.keep_ratio)+\
         '_gs_'+str(args.grid_size)+'_lam_'+str(args.lambda1)+\
         '_attn_'+str(args.attn_flag)+'_prob_'+str(args.dis_prob_mask_flag)+\
         '_fea_'+str(fea_flag)+'_'+time.strftime("%Y%m%d_%H%M%S") + '/'
@@ -222,13 +236,13 @@ if __name__ == '__main__':
 
     train_iterator = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size,
                                                  shuffle=args.shuffle, collate_fn=collate_fn,
-                                                num_workers=4, pin_memory=True)
+                                                num_workers=0, pin_memory=True)
     valid_iterator = torch.utils.data.DataLoader(valid_dataset, batch_size=args.batch_size,
                                                  shuffle=args.shuffle, collate_fn=collate_fn,
-                                                num_workers=4, pin_memory=True)
+                                                num_workers=0, pin_memory=True)
     test_iterator = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size,
                                                 shuffle=args.shuffle, collate_fn=collate_fn,
-                                               num_workers=4, pin_memory=True)
+                                               num_workers=0, pin_memory=True)
 
     logging.info('Finish data preparing.')
     logging.info('training dataset shape: ' + str(len(train_dataset)))
@@ -237,7 +251,8 @@ if __name__ == '__main__':
 
     enc = Encoder(args)
     dec = DecoderMulti(args)
-    model = Seq2SeqMulti(enc, dec, device).to(device)
+    # model = Seq2SeqMulti(enc, dec, args).to(device)
+    model = TransformerModel(enc, dec, args, rn, new2raw_rid_dict, raw2new_rid_dict).to(device)
     model.apply(init_weights)  # learn how to init weights
     if args.load_pretrained_flag:
         model.load_state_dict(torch.load(args.model_old_path + 'val-best-model.pt'))
@@ -259,6 +274,7 @@ if __name__ == '__main__':
         # get all parameters (model parameters + task dependent log variances)
         log_vars = [torch.zeros((1,), requires_grad=True, device=device)] * 2  # use for auto-tune multi-task param
         optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate)
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=5, verbose=True)
         for epoch in tqdm(range(args.n_epochs)):
             start_time = time.time()
 
@@ -290,6 +306,7 @@ if __name__ == '__main__':
             ls_valid_rate_loss.append(valid_rate_loss)
             ls_valid_id_loss.append(valid_id_loss)
             valid_loss = valid_rate_loss + valid_id_loss
+            scheduler.step(valid_loss)
             ls_valid_loss.append(valid_loss)
 
             dict_train_loss['train_ttl_loss'] = ls_train_loss

@@ -13,6 +13,7 @@ from common.spatial_func import distance, cal_loc_along_line, SPoint
 from map_matching.candidate_point import get_candidates, CandidatePoint
 
 from utils.utils import load_json_data
+import pdb
 
 
 #####################################################################################################
@@ -46,6 +47,7 @@ def load_rn_dict(dir, file_name):
         # convert str to SPoint() to calculate distance 
         new_rn_dict[int(k)]['length'] = v['length']
         new_rn_dict[int(k)]['level'] = candi_highway_types[v['highway']]
+
     del rn_dict
     return new_rn_dict
 
@@ -411,7 +413,7 @@ def get_rid_rnfea_dict(rn_dict, parameters):
     df = df.join(one_hot_df)
     
     # get number of neighbours (standardization)
-    g = nx.Graph()
+    g = nx.DiGraph()
     edges = []
     for coords in df['coords'].values:
         start_node = (coords[0].lat, coords[0].lng)
@@ -419,27 +421,37 @@ def get_rid_rnfea_dict(rn_dict, parameters):
         edges.append((start_node, end_node))
     g.add_edges_from(edges)
 
-    num_start_neighbors = []
-    num_end_neighbors = []
+    num_start_neighbors_in = []
+    num_end_neighbors_in = []
+    num_start_neighbors_out = []
+    num_end_neighbors_out = []
     for coords in df['coords'].values:
         start_node = (coords[0].lat, coords[0].lng)
         end_node = (coords[-1].lat, coords[-1].lng)
-        num_start_neighbors.append(len(list(g.edges(start_node))))
-        num_end_neighbors.append(len(list(g.edges(end_node))))
-    df['num_start_neighbors'] = num_start_neighbors
-    df['num_end_neighbors'] = num_end_neighbors
-    start = df['num_start_neighbors']
-    end = df['num_end_neighbors']
+        num_start_neighbors_in.append(len(list(g.in_edges(start_node))))
+        num_end_neighbors_in.append(len(list(g.in_edges(end_node))))
+        num_start_neighbors_out.append(len(list(g.out_edges(start_node))))
+        num_end_neighbors_out.append(len(list(g.out_edges(end_node))))
+    df['num_start_neighbors_in'] = num_start_neighbors_in
+    df['num_end_neighbors_in'] = num_end_neighbors_in
+    df['num_start_neighbors_out'] = num_start_neighbors_out
+    df['num_end_neighbors_out'] = num_end_neighbors_out
+    start_in = df['num_start_neighbors_in']
+    end_in = df['num_end_neighbors_in']
+    start_out = df['num_start_neighbors_out']
+    end_out = df['num_end_neighbors_out']
     # distribution is like gaussian --> use min max normalization
-    df['norm_num_start_neighbors'] = (start - start.min())/(start.max() - start.min())  
-    df['norm_num_end_neighbors'] = (end - end.min())/(end.max() - end.min())
+    df['norm_num_start_neighbors_in'] = (start_in - start_in.min())/(start_in.max() - start_in.min())  
+    df['norm_num_end_neighbors_in'] = (end_in - end_in.min())/(end_in.max() - end_in.min())
+    df['norm_num_start_neighbors_out'] = (start_out - start_out.min())/(start_out.max() - start_out.min())  
+    df['norm_num_end_neighbors_out'] = (end_out - end_out.min())/(end_out.max() - end_out.min())
     
     # convert to dict <key:rid, value:fea>
     norm_rid_rnfea_dict = {}
     for i in range(len(df)):
         k = df.index[i]
-        v = df.iloc[i][['norm_len', 'level_4',\
-                        'norm_num_start_neighbors','norm_num_end_neighbors']]
+        v = df.iloc[i][['norm_len', 'level_3', 'level_4', 'level_5', 'level_7', 'level_11', 'level_12', 'level_13', 'level_14',\
+                        'norm_num_start_neighbors_in','norm_num_end_neighbors_in','norm_num_start_neighbors_out','norm_num_end_neighbors_out']]
         norm_rid_rnfea_dict[k] = list(v)
     
     norm_rid_rnfea_dict[0] = [0.]*len(list(v)) # add soss

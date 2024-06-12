@@ -11,6 +11,7 @@ import torch.nn.functional as F
 from map_matching.candidate_point import CandidatePoint
 from map_matching.utils import find_shortest_path
 from common.spatial_func import SPoint, distance
+import pdb
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -165,7 +166,7 @@ def lcs(xs, ys):
     return lcs_(len(xs), len(ys))
 
 
-def cal_id_acc(predict, target, trg_len):
+def cal_id_acc(predict, target, trg_len, debug=False):
     """
     Calculate RID accuracy between predicted and targeted RID sequence.
     1. no repeated rid for two consecutive road segments

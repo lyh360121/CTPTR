@@ -107,11 +107,13 @@ class Dataset(torch.utils.data.Dataset):
         parser = ParseMMTraj()
 
         if debug:
-            trg_paths = os.listdir(trajs_dir)[:3]
+            trg_paths = os.listdir(trajs_dir)[:32]
             num = -1
         else:
             trg_paths = os.listdir(trajs_dir)
             num = -1
+
+        # trajs = parser.shortest()
 
         for file_name in tqdm(trg_paths):
             trajs = parser.parse(os.path.join(trajs_dir, file_name))
@@ -166,6 +168,8 @@ class Dataset(torch.utils.data.Dataset):
             tmp_pt_list = tr.pt_list
             # if self.is_test and len(tmp_pt_list) < 1/keep_ratio:
             #     continue
+            if len(tmp_pt_list) < 1/keep_ratio:
+                continue
             new_tid_ls.append(tr.tid)
 
             # get target sequence
@@ -174,16 +178,17 @@ class Dataset(torch.utils.data.Dataset):
                 return None, None, None, None, None, None, None
 
             # get source sequence
+            # ds_pt_list = tmp_pt_list
             ds_pt_list = self.downsample_traj(tmp_pt_list, ds_type, keep_ratio)
             # spe sequence
-            ds_pt_list = self.enhance_traj(ds_pt_list)
+            # ds_pt_list = self.enhance_traj(ds_pt_list)
             ls_grid_seq, ls_gps_seq, hours, ttl_t = self.get_src_seq(ds_pt_list, norm_grid_poi_dict, norm_grid_rnfea_dict)
             
             features = self.get_pro_features(ds_pt_list, hours, weather_dict)
 
             # check if src and trg len equal, if not return none
-            # if len(mm_gps_seq) != ttl_t:
-            #     return None, None, None, None, None, None, None
+            if len(mm_gps_seq) != ttl_t:
+                return None, None, None, None, None, None, None
             
             mm_gps_seq_ls.append(mm_gps_seq)
             mm_eids_ls.append(mm_eids)
@@ -231,26 +236,28 @@ class Dataset(torch.utils.data.Dataset):
         traj_enhanced = [STPoint(lat, lng, time)]
 
         path_dist, path = find_shortest_path(self.rn, src_pt, dest_pt)
-        if path is not None and path_dist > 0:
+        if path is not None:
             time_span = (pro_pt.time - pre_pt.time).total_seconds()
             velocity = path_dist / time_span # m/s
 
             # src
             eid_src = src_pt.eid
             edge_src = self.rn.edge_idx[eid_src]
-            if src_pt.rate == 0:
+            if velocity == 0:
+                seconds = 0
+            elif src_pt.rate == 0:
                 seconds = self.rn[edge_src[0]][edge_src[1]]['length'] / velocity
             else:
                 seconds = (1-src_pt.rate)/src_pt.rate*src_pt.offset/velocity
             time = time + timedelta(seconds=seconds)
             lat = edge_src[1][1]
             lng = edge_src[1][0]
-            if src_pt.rate != 1:
-                traj_enhanced.append(STPoint(lat, lng, time))
+            # if src_pt.rate != 1:
+            traj_enhanced.append(STPoint(lat, lng, time))
             
             # shortest path
             if len(path) > 1:
-                for seg_id in range(len(path) - 1):
+                for seg_id in range(len(path)-1):
                     node_start = path[seg_id]
                     node_end = path[seg_id + 1]
                     if (seg_id == len(path) - 2) and (dest_pt.rate == 0):
@@ -266,11 +273,12 @@ class Dataset(torch.utils.data.Dataset):
         # dest
         eid_dest = dest_pt.eid
         edge_dest = self.rn.edge_idx[eid_dest]
-        if dest_pt.rate != 0:
-            time = pro_pt.time
-            lat = edge_dest[0][1]
-            lng = edge_dest[0][0]
-            traj_enhanced.append(STPoint(lat, lng, time))
+        # if dest_pt.rate != 0:
+        time = pro_pt.time
+        lat = edge_dest[0][1]
+        lng = edge_dest[0][0]
+        traj_enhanced.append(STPoint(lat, lng, time))
+        pdb.set_trace()
 
         return traj_enhanced
     
@@ -331,6 +339,9 @@ class Dataset(torch.utils.data.Dataset):
             t = self.get_noramlized_t(first_pt, ds_pt, time_interval)
             ls_gps_seq.append([ds_pt.lat, ds_pt.lng])
             locgrid_xid, locgrid_yid = self.gps2grid(ds_pt, self.mbr, self.grid_size)
+            # candi_pt = ds_pt.data['candi_pt']
+            # ls_gps_seq.append([candi_pt.lat, candi_pt.lng])
+            # locgrid_xid, locgrid_yid = self.gps2grid(candi_pt, self.mbr, self.grid_size)
             if self.online_features_flag:
                 poi_features = norm_grid_poi_dict[(locgrid_xid, locgrid_yid)]
                 rn_features = norm_grid_rnfea_dict[(locgrid_xid, locgrid_yid)]
@@ -343,7 +354,7 @@ class Dataset(torch.utils.data.Dataset):
     
     def get_pro_features(self, ds_pt_list, hours, weather_dict):
         holiday = is_holiday(ds_pt_list[0].time)*1
-        day = ds_pt_list[0].time.day
+        # day = ds_pt_list[0].time.day
         count =  np.bincount(hours)
         hour = {'hour': max(range(len(count)), key=count.__getitem__)}  # find most frequent hours as hour of the trajectory
         # weather = {'weather': weather_dict[(day, hour['hour'])]}
@@ -380,8 +391,8 @@ class Dataset(torch.utils.data.Dataset):
         calculate normalized t from first and current pt
         return time index (normalized time)
         """
-        # t = int(1+((current_pt.time - first_pt.time).seconds/time_interval))
-        t = (current_pt.time - first_pt.time).seconds
+        t = int(1+((current_pt.time - first_pt.time).seconds/time_interval))
+        # t = (current_pt.time - first_pt.time).seconds
         return t
 
     @staticmethod

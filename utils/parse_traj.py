@@ -79,6 +79,11 @@ class ParseMMTraj(ParseTraj):
         super().__init__()
         self.raw2new_rid_dict = raw2new_rid_dict
 
+    def shortest(self, rn):
+        time_format = '%Y/%m/%d %H:%M:%S'
+        trajs = []
+        pt_list = []
+
     def parse(self, input_path):
         """
         Args:
